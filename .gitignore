@@ -1,0 +1,25 @@
+# Claude session data (may contain sensitive info)
+.claude/
+
+# Credentials / API keys
+kaggle.json
+credentials.json
+access_token
+*.token
+*.key
+
+# Kaggle competition data (not redistributable)
+train.csv
+test.csv
+gender_submission.csv
+titanic.zip
+titanic/
+
+# Generated submission files
+submission.csv
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.env

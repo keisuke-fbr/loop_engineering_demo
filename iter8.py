@@ -1,0 +1,62 @@
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier
+from sklearn.svm import SVC
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.calibration import CalibratedClassifierCV
+
+train_df = pd.read_csv('train.csv')
+test_df  = pd.read_csv('test.csv')
+all_df = pd.concat([train_df, test_df], sort=False).reset_index(drop=True)
+
+# リーク回避: train+test 全体からチケットグループサイズを計算
+ticket_counts = all_df['Ticket'].value_counts()
+all_df['TicketGroupSize'] = all_df['Ticket'].map(ticket_counts)
+
+def prepare(df):
+    df = df.copy()
+    df['Title'] = df['Name'].str.extract(r' ([A-Za-z]+)\.', expand=False)
+    df['Title'] = df['Title'].replace(
+        ['Lady','Countess','Capt','Col','Don','Dr','Major','Rev','Sir','Jonkheer','Dona'], 'Rare')
+    df['Title'] = df['Title'].replace({'Mlle':'Miss','Ms':'Miss','Mme':'Mrs'})
+    df['Title'] = LabelEncoder().fit_transform(df['Title'])
+    df['FamilySize'] = df['SibSp'] + df['Parch'] + 1
+    df['IsAlone'] = (df['FamilySize'] == 1).astype(int)
+    df['Sex'] = LabelEncoder().fit_transform(df['Sex'])
+    df['Age'] = df.groupby('Title')['Age'].transform(lambda x: x.fillna(x.median()))
+    df['Age'] = df['Age'].fillna(df['Age'].median())
+    df['Fare'] = df['Fare'].fillna(df['Fare'].median())
+    df['Embarked'] = df['Embarked'].fillna('S')
+    df['Embarked'] = LabelEncoder().fit_transform(df['Embarked'])
+    df['AgeBin'] = pd.cut(df['Age'], bins=[0,12,18,35,60,100], labels=[0,1,2,3,4]).astype(int)
+    df['FareBin'] = pd.qcut(df['Fare'], q=4, labels=[0,1,2,3]).astype(int)
+    return df
+
+train_feat = prepare(all_df[all_df['Survived'].notna()].copy())
+test_feat  = prepare(all_df[all_df['Survived'].isna()].copy())
+
+features = ['Pclass','Sex','AgeBin','FareBin','Embarked','Title',
+            'FamilySize','IsAlone','TicketGroupSize']
+
+X_train = train_feat[features]
+y_train = train_feat['Survived'].astype(int)
+
+rf  = RandomForestClassifier(n_estimators=300, max_depth=5, min_samples_leaf=2, random_state=42)
+svc = Pipeline([('s', StandardScaler()),
+                ('m', CalibratedClassifierCV(SVC(kernel='rbf', C=1.0, random_state=42)))])
+lr  = Pipeline([('s', StandardScaler()),
+                ('m', LogisticRegression(C=1.0, max_iter=1000, random_state=42))])
+
+ensemble = VotingClassifier([('rf', rf), ('svc', svc), ('lr', lr)], voting='soft', weights=[2,2,1])
+scores = cross_val_score(ensemble, X_train, y_train, cv=5, scoring='accuracy')
+print(f"CV: {scores.mean():.4f} (+/- {scores.std():.4f})")
+
+ensemble.fit(X_train, y_train)
+preds = ensemble.predict(test_feat[features]).astype(int)  # int に明示キャスト
+submission = pd.DataFrame({'PassengerId': test_feat['PassengerId'].astype(int), 'Survived': preds})
+submission.to_csv('submission.csv', index=False)
+print(f"submission.csv 生成完了 (Survived dtype: {preds.dtype})")
+print(submission['Survived'].value_counts())
